@@ -1,15 +1,47 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Body
+import os
+from functools import lru_cache
+
+from fastapi import FastAPI, Body, HTTPException
 
 from interfaces.actions import Action
 from interfaces.observation import Observation
 from interfaces.task_solution import TaskSolution
 
+try:
+    # Optional dependency: used when OPENAI_API_KEY is configured.
+    from autoppia_iwa.src.llms.interfaces import LLMConfig
+    from autoppia_iwa.src.llms.service import OpenAIService
+except Exception:  # noqa: BLE001
+    LLMConfig = None  # type: ignore[assignment]
+    OpenAIService = None  # type: ignore[assignment]
+
 
 FIXED_AUTBOOKS_URL = "http://84.247.180.192:8001/books/book-original-002?seed=36"
 
 app = FastAPI(title="Autoppia Web Agent API")
+
+
+@lru_cache()
+def _get_openai_llm() -> Optional["OpenAIService"]:  # type: ignore[name-defined]
+    """
+    Lazily construct an OpenAI LLM using the IWA helper.
+
+    This will only be available when:
+      - autoppia_iwa is installed in the environment, and
+      - OPENAI_API_KEY is provided.
+    """
+    if OpenAIService is None or LLMConfig is None:  # type: ignore[truthy-function]
+        return None
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
+    max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "512"))
+    cfg = LLMConfig(model=model, temperature=temperature, max_tokens=max_tokens)  # type: ignore[call-arg]
+    return OpenAIService(cfg, api_key=api_key)  # type: ignore[arg-type]
 
 
 @app.get("/health", summary="Health check")
@@ -67,6 +99,54 @@ async def solve_task(payload: Dict[str, Any] = Body(...)) -> TaskSolution:
         summary=f"Stub agent navigated to {observation.url} and captured a screenshot for prompt: {observation.task_prompt}",
         actions=actions,
         final_answer="Completed with stub agent.",
+    )
+
+
+@app.post("/solve_task_llm", response_model=TaskSolution, summary="Solve a task using OpenAI via IWA LLM")
+async def solve_task_llm(payload: Dict[str, Any] = Body(...)) -> TaskSolution:
+    """
+    Task handler that uses the IWA OpenAIService helper when available.
+
+    This is intended to demonstrate:
+      - How miners can plug in the shared LLM layer from autoppia_iwa.
+      - How the sandbox proxy can be used to reach the ChatGPT API.
+    """
+    normalized = _normalize_request(payload)
+    observation = Observation(**normalized)
+
+    llm = _get_openai_llm()
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAI LLM not configured; ensure autoppia_iwa is installed and OPENAI_API_KEY is set.",
+        )
+
+    system_prompt = (
+        "You are a concise web task assistant. "
+        "Given the current page URL and a user task prompt, "
+        "respond with a short final answer describing how the task should be solved."
+    )
+    user_prompt = (
+        f"Current URL: {observation.url}\n\n"
+        f"Task: {observation.task_prompt}\n\n"
+        "Provide a single-paragraph final answer."
+    )
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    # Use the async OpenAI helper from autoppia_iwa.
+    final_answer = await llm.async_predict(messages)  # type: ignore[call-arg]
+
+    actions: List[Action] = [
+        {"action_type": "navigate", "url": str(observation.url)},
+    ]
+    return TaskSolution(
+        status="completed",
+        summary=f"LLM-based agent produced an answer for {observation.url}",
+        actions=actions,
+        final_answer=final_answer,
     )
 
 
