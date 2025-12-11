@@ -12,10 +12,10 @@ from interfaces.task_solution import TaskSolution
 try:
     # Optional dependency: used when OPENAI_API_KEY is configured.
     from autoppia_iwa.src.llms.interfaces import LLMConfig
-    from autoppia_iwa.src.llms.service import OpenAIService
+    from autoppia_iwa.src.llms.service import ChutesLLMService
 except Exception:  # noqa: BLE001
     LLMConfig = None  # type: ignore[assignment]
-    OpenAIService = None  # type: ignore[assignment]
+    ChutesLLMService = None  # type: ignore[assignment]
 
 
 FIXED_AUTBOOKS_URL = "http://84.247.180.192:8001/books/book-original-002?seed=36"
@@ -24,24 +24,35 @@ app = FastAPI(title="Autoppia Web Agent API")
 
 
 @lru_cache()
-def _get_openai_llm() -> Optional["OpenAIService"]:  # type: ignore[name-defined]
+def _get_openai_llm() -> Optional["ChutesLLMService"]:  # type: ignore[name-defined]
     """
-    Lazily construct an OpenAI LLM using the IWA helper.
+    Lazily construct an LLM client that talks to the ChatGPT API via the
+    sandbox proxy, using the generic ChutesLLMService helper from IWA.
 
     This will only be available when:
       - autoppia_iwa is installed in the environment, and
       - OPENAI_API_KEY is provided.
     """
-    if OpenAIService is None or LLMConfig is None:  # type: ignore[truthy-function]
+    if ChutesLLMService is None or LLMConfig is None:  # type: ignore[truthy-function]
         return None
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
+
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
     max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "512"))
+
+    # In the sandbox, OPENAI_ENDPOINT_URL is set to the internal proxy URL,
+    # typically http://sandbox_proxy:80/v1, which reverse-proxies to
+    # https://api.openai.com/v1.
+    base_url = os.getenv("OPENAI_ENDPOINT_URL") or os.getenv("SANDBOX_PROXY_URL", "http://sandbox_proxy")
+    if not base_url.endswith("/v1"):
+        base_url = base_url.rstrip("/") + "/v1"
+
     cfg = LLMConfig(model=model, temperature=temperature, max_tokens=max_tokens)  # type: ignore[call-arg]
-    return OpenAIService(cfg, api_key=api_key)  # type: ignore[arg-type]
+    # use_bearer=True so Authorization: Bearer <OPENAI_API_KEY> is sent to the upstream.
+    return ChutesLLMService(cfg, base_url=base_url, api_key=api_key, use_bearer=True)  # type: ignore[arg-type]
 
 
 @app.get("/health", summary="Health check")
@@ -136,8 +147,12 @@ async def solve_task_llm(payload: Dict[str, Any] = Body(...)) -> TaskSolution:
         {"role": "user", "content": user_prompt},
     ]
 
-    # Use the async OpenAI helper from autoppia_iwa.
-    final_answer = await llm.async_predict(messages)  # type: ignore[call-arg]
+    # Use the async helper from autoppia_iwa (ChatGPT via proxy).
+    try:
+        final_answer = await llm.async_predict(messages)  # type: ignore[call-arg]
+    except Exception as e:  # noqa: BLE001
+        # Surface the underlying error so it's easier to debug from tests.
+        raise HTTPException(status_code=502, detail=f"OpenAI call failed: {e}") from e
 
     actions: List[Action] = [
         {"action_type": "navigate", "url": str(observation.url)},
