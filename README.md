@@ -1,114 +1,84 @@
-# autoppia_operator (Miner Example)
+# autoppia_web_agent_example (Template)
 
-This repo is a minimal FastAPI web-agent service intended to run as a **miner** in the Autoppia web-agents subnet.
+This repository is a **format template** for Autoppia web-agent miners.
 
-## What the validator runs
+It is intentionally **not** a real agent implementation.
 
-The validator starts your container with:
+## Purpose
+
+Use this repo to understand the minimum API contract expected by the subnet validator:
+
+- `main.py` must export `app`
+- `GET /health` must return HTTP 200
+- `POST /act` must return JSON with top-level `actions` list
+
+## Current behavior
+
+`POST /act` always returns:
+
+```json
+{"actions": []}
+```
+
+This is by design. It demonstrates the response schema only.
+
+## Entry point
+
+Validator-compatible run command:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port $SANDBOX_AGENT_PORT
 ```
 
-So the only hard requirements are:
-- `main.py` exports `app`
-- `GET /health` returns 200
-- `POST /act` returns `{ "actions": [...] }`
+## Example `/act` request shape
 
-### Sandbox dependencies / requirements.txt
-
-The subnet validator runs your repo inside a sandbox image with a fixed Python environment.
-
-This repo's `requirements.txt` is intended to be **identical** to the sandbox requirements shipped in the subnet (`autoppia_web_agents_subnet/opensource/sandbox/requirements.txt`).
-
-If you change dependencies here, also update the subnet sandbox image (otherwise your miner may work locally but fail in production).
-
-
-## Gateway / OpenAI routing
-
-In subnet production, miners **must not** call OpenAI directly. The validator runs a local HTTP proxy (the "sandbox gateway") and injects:
-
-- `OPENAI_BASE_URL=http://sandbox-gateway:9000/openai/v1`
-
-Your agent should send requests to `${OPENAI_BASE_URL}/chat/completions` (or the equivalent endpoint) so the gateway can enforce policy, collect metrics, and use the validator-controlled provider keys.
-
-### Task id propagation (required)
-
-Every LLM request must include the header:
-
-- `IWA-Task-ID: <task_id>`
-
-Where `<task_id>` is the `task_id` value received in `POST /act`.
-
-This is how the gateway correlates all model calls to a single evaluation episode.
-
-### Where it is implemented here
-
-- `llm_gateway.py`: minimal OpenAI-compatible client that:
-  - reads `OPENAI_BASE_URL`
-  - injects `IWA-Task-ID`
-  - only uses `OPENAI_API_KEY` when you are **not** using the sandbox gateway
-- `agent.py`: calls `openai_chat_completions(task_id=..., ...)` so the header is always present.
-
-
-## Agent flow
-
-`POST /act` (`agent.py`) receives:
-- `task_id`: used for `IWA-Task-ID` header
-- `prompt`: natural-language task
-- `url`: current page URL
-- `snapshot_html`: current page HTML
-- `step_index`: current step number
-- `history`: last actions (best-effort)
-
-The agent then:
-1. Extracts interactive candidates from HTML (buttons/links/inputs, etc.).
-2. Ranks candidates against the task.
-3. Builds a compact page summary + DOM digest.
-4. Calls the LLM once to choose the next single action (`click`/`type`/`select`/`scroll_*`/`done`).
-5. Returns a single IWA action (e.g. `ClickAction`, `TypeAction`, ...).
-
-Credential placeholders like `<username>` / `<password>` are handled by IWA (the evaluator replaces placeholders in actions before execution).
-
-## Local eval
-
-This repo includes a local evaluator:
-
-```bash
-python eval.py --model gpt-5.2 --num-tasks 5 --distinct-use-cases
+```json
+{
+  "task_id": "example-task-id",
+  "prompt": "Do something on the webpage",
+  "url": "https://example.com",
+  "snapshot_html": "<html>...</html>",
+  "step_index": 0,
+  "history": []
+}
 ```
 
-Task generation helper (writes the cache consumed by `eval.py`):
+## Included tools for miners
+
+These are generic and reusable helpers, not agent logic:
+
+- `llm_gateway.py`
+  - OpenAI-compatible gateway helper
+  - Adds required `IWA-Task-ID` header
+  - Reads `OPENAI_BASE_URL` so miners can route through sandbox gateway
+- `eval.py`
+  - Generic `/act` evaluator (shape + status + latency)
+  - Works with default synthetic tasks or a JSON tasks file
+- `compare_eval.py`
+  - Runs `eval.py` across multiple `provider:model` configs and aggregates results
+
+## Quick usage
+
+Run template server:
 
 ```bash
-python scripts/generate_tasks.py --project-id autocinema --prompts-per-use-case 1
+uvicorn main:app --host 0.0.0.0 --port 5000
 ```
 
-Outputs are written to `data/` (gitignored).
-
-
-## Model comparison
-
-To compare multiple models/providers on the same task set, use:
+Run generic eval:
 
 ```bash
-python compare_eval.py --runs openai:gpt-5.2 openai:gpt-4o-mini --num-tasks 5 --distinct-use-cases
+python eval.py --agent-base-url http://127.0.0.1:5000 --num-tasks 5
 ```
 
-Anthropic example (requires `ANTHROPIC_API_KEY` in your env):
+Run compare tool:
 
 ```bash
-python compare_eval.py --runs anthropic:claude-sonnet-4 --num-tasks 5 --distinct-use-cases
+python compare_eval.py --runs openai:gpt-5.2 openai:gpt-4o-mini --agent-base-url http://127.0.0.1:5000 --num-tasks 5
 ```
 
-Outputs:
-- `data/compare/<provider>__<model>.json`
-- `data/compare/compare_summary.json`
+## Notes for miners
 
-## Repo self-check
-
-```bash
-python check.py
-```
-
-This validates entrypoints, endpoint shapes, and scans for obvious secrets.
+- Start from this template and add your own logic incrementally.
+- Keep the response shape stable: `{ "actions": [...] }`.
+- Optionally implement `/step` as an alias for `/act`.
