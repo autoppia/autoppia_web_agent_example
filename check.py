@@ -10,6 +10,7 @@ So the repo must provide:
 - main.py exporting `app`
 - GET /health
 - POST /act (and optionally /step)
+- POST /find_trayectory for the current trajectory-finder protocol
 
 Gateway requirement (Subnet/IWA): every LLM request must:
 - go to OPENAI_BASE_URL (sandbox gateway proxy)
@@ -190,6 +191,25 @@ def _call_act(app) -> dict[str, Any] | None:
     return None
 
 
+def _validate_find_trayectory_route(app) -> Optional[str]:
+    if not _find_route(app, "/find_trayectory", "POST"):
+        return "POST /find_trayectory route not found"
+
+    try:
+        provider_path = REPO_ROOT / "claude_code_provider.py"
+        text = _read_text(provider_path)
+        if not provider_path.exists():
+            return "claude_code_provider.py not found"
+        if "claude" not in text or "create_subprocess_exec" not in text:
+            return "claude_code_provider.py does not appear to invoke Claude Code CLI"
+        if "trajectory" not in text:
+            return "claude_code_provider.py does not model trajectory output"
+    except Exception as exc:
+        return f"unable to validate Claude Code provider: {exc}"
+
+    return None
+
+
 def _validate_actions_shape(resp: dict[str, Any]) -> Optional[str]:
     if "actions" not in resp:
         return "Missing top-level 'actions' key"
@@ -242,6 +262,7 @@ def main() -> None:
 
     main_py = REPO_ROOT / "main.py"
     agent_py = REPO_ROOT / "agent.py"
+    claude_provider_py = REPO_ROOT / "claude_code_provider.py"
     llm_gateway_py = REPO_ROOT / "llm_gateway.py"
     requirements_txt = REPO_ROOT / "requirements.txt"
 
@@ -307,7 +328,7 @@ def main() -> None:
             )
 
     # Compile key python files to catch syntax errors.
-    for p in (main_py, agent_py, llm_gateway_py):
+    for p in (main_py, agent_py, claude_provider_py, llm_gateway_py):
         if p.exists():
             try:
                 py_compile.compile(str(p), doraise=True)
@@ -342,6 +363,12 @@ def main() -> None:
         _ok("POST /step route found")
     else:
         _warn("POST /step route not found (optional)")
+
+    route_err = _validate_find_trayectory_route(app)
+    if route_err:
+        _fail(route_err)
+    _ok("POST /find_trayectory route found")
+    _ok("Claude Code trajectory provider found")
 
     # Basic response shape check
     resp = _call_act(app)
