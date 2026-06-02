@@ -1,6 +1,8 @@
 # autoppia_web_agent_example (Template)
 
-This repository is a **reference implementation** for Autoppia web-agent miners.
+This repository is a **format template** for Autoppia web-agent miners.
+
+It intentionally does not include a concrete model/provider implementation.
 
 ## Purpose
 
@@ -13,14 +15,12 @@ Use this repo to understand the minimum API contract expected by the subnet vali
 
 ## Current behavior
 
-`POST /find_trayectory` invokes Claude Code and returns:
+`POST /find_trayectory` always returns an empty template trajectory:
 
 ```json
 {
   "web_agent_id": "autoppia-web-agent-example",
-  "trajectory": [
-    {"name": "browser.navigate", "arguments": {"url": "https://example.com"}}
-  ]
+  "trajectory": []
 }
 ```
 
@@ -53,10 +53,6 @@ These are generic and reusable helpers, not agent logic:
   - OpenAI-compatible gateway helper
   - Adds required `IWA-Task-ID` header
   - Reads `OPENAI_BASE_URL` so miners can route through sandbox gateway
-- `claude_code_provider.py`
-  - Claude Code CLI adapter for `/find_trayectory`
-  - Reads `CLAUDE_CODE_BIN`, `CLAUDE_CODE_MODEL`, `CLAUDE_CODE_TIMEOUT_SECONDS`, and optional `CLAUDE_CODE_MAX_BUDGET_USD`
-  - Requires Claude Code CLI on `PATH` and either `ANTHROPIC_API_KEY` or existing Claude auth
 - `eval.py`
   - Generic `/act` evaluator (shape + status + latency)
   - Works with default synthetic tasks or a JSON tasks file
@@ -96,5 +92,5 @@ python compare_eval.py --runs openai:gpt-5.2 openai:gpt-4o-mini --agent-base-url
 - Start from this template and add your own logic incrementally.
 - Keep the new response shape stable: `{ "trajectory": [...] }`.
 - Each trajectory item should be a tool call: `{ "name": "browser.click", "arguments": {...} }`.
-- Claude Code is a CLI dependency, not a Python package. In Docker, install/provide `claude`; in local dev, run `claude auth` or set `ANTHROPIC_API_KEY`.
+- This repo is abstract. Put concrete model/provider logic in your miner repo, not in this template.
 - Optionally keep `/step` as an alias for `/act` for older validators.

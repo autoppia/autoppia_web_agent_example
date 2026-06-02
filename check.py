@@ -194,19 +194,6 @@ def _call_act(app) -> dict[str, Any] | None:
 def _validate_find_trayectory_route(app) -> Optional[str]:
     if not _find_route(app, "/find_trayectory", "POST"):
         return "POST /find_trayectory route not found"
-
-    try:
-        provider_path = REPO_ROOT / "claude_code_provider.py"
-        text = _read_text(provider_path)
-        if not provider_path.exists():
-            return "claude_code_provider.py not found"
-        if "claude" not in text or "create_subprocess_exec" not in text:
-            return "claude_code_provider.py does not appear to invoke Claude Code CLI"
-        if "trajectory" not in text:
-            return "claude_code_provider.py does not model trajectory output"
-    except Exception as exc:
-        return f"unable to validate Claude Code provider: {exc}"
-
     return None
 
 
@@ -368,7 +355,6 @@ def main() -> None:
     if route_err:
         _fail(route_err)
     _ok("POST /find_trayectory route found")
-    _ok("Claude Code trajectory provider found")
 
     # Basic response shape check
     resp = _call_act(app)

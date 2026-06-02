@@ -1,10 +1,7 @@
 FROM python:3.11-slim
 
-ARG INSTALL_CLAUDE_CODE=false
-
 RUN apt-get update && \
-    apt-get install -y curl git && \
-    if [ "$INSTALL_CLAUDE_CODE" = "true" ]; then apt-get install -y npm && npm install -g @anthropic-ai/claude-code; fi && \
+    apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
